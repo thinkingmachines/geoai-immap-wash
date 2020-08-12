@@ -21,10 +21,10 @@ with filtered as (
     order by adm1_name, urban_area_size desc
 ),
 instanced as (
-    select *, row_number() over(partition by adm1_name) instance from filtered
+    select *, row_number() over(partition by adm1_name order by urban_area_size desc) instance from filtered
 )
 
-select * except(instance) from instanced where instance = 1
+select * except(instance) from instanced where instance = 1;
 
 -- output table: mgn_urban_areas_distance_to_dept_capital
 select
@@ -38,7 +38,7 @@ from
 `wash_prep.indicator_labelled_grid` grid
 left join
 `wash_prep.mgn_urban_areas_dept_capital` area
-on grid.adm1_name = area.adm1_name
+on grid.adm1_name = area.adm1_name;
 
 -- output table: pixelated_urban_areas_wadmin
 SELECT
@@ -84,7 +84,7 @@ GROUP BY
   id;
 
 -- output table: pixelated_urban_areas_distance_between_muni_centers
-SELECT f0_.adm1_name adm1_name, avg(f0_.dist) distance_between_muni_centers FROM `wash_prep.pixelated_urban_areas_area_level_nearest` group by 1 order by 2
+SELECT f0_.adm1_name adm1_name, avg(f0_.dist) distance_between_muni_centers FROM `wash_prep.pixelated_urban_areas_area_level_nearest` group by 1 order by 2;
 
 -- output table: pixelated_urban_areas_nearest_area_to_grid
 select
@@ -115,5 +115,5 @@ from
 wash_prep.indicator_labelled_grid a
 left join wash_prep.mgn_urban_areas_distance_to_dept_capital b on a.id = b.id
 left join wash_prep.pixelated_urban_areas_distance_between_muni_centers c on a.adm1_name = c.adm1_name
-left join wash_prep.pixelated_urban_areas_nearest_area_to_grid d on a.id = d.id
+left join wash_prep.pixelated_urban_areas_nearest_area_to_grid d on a.id = d.id;
 
