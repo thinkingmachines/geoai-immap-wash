@@ -4,6 +4,46 @@ import re
 project = 'immap-colombia-270609'
 dataset = 'wash_prep'
 
+def generate_blocks_geopackage(gdf, adm):
+    '''
+    Generates wash_indicators_by_block.csv, the raw blocks dataset converted to geopackage format
+    
+    Steps:
+    1. Generate grid boxes for whole Colombia using QGIS (grid_1x1km.gpkg)
+    2. Run function to get wash_indicators_by_block.csv
+    3. Upload wash_indicators_by_block to BQ then process using indicator_labelled_grid.sql
+    
+    Input:
+    gdf - GeoDataFrame of raw blocks dataset
+    adm - GeoDataFrame of admin boundaries in Colombia
+    '''
+    
+    def sub(text, start,end): 
+        return text[start:end];
+    
+    adm['adm2_code'] = adm['admin2Pcod'].apply(sub, args=(2,None)).astype(int)
+    gdf['adm2_code'] = gdf['cod_dane'].apply(sub, args=(0,5)).astype(int)
+
+    gdf2 = pd.merge(gdf, adm[['adm2_code', 'admin1Name', 'admin2RefN']], on = 'adm2_code', how = 'left')
+    rnm = {
+        'd_mc_acued': 'perc_hh_no_water_supply',
+        'd_mc_alcan': 'perc_hh_no_sewage',
+        'd_mc_sanit': 'perc_hh_no_toilet',
+        'admin1Name': 'adm1_name', 
+        'admin2RefN': 'adm2_name',
+    }
+
+    gdf2.rename(columns=rnm, inplace = True)
+    gdf2.dropna(inplace = True)
+    gdf2 = gdf2.to_crs('EPSG:4326')
+
+    gdf2.to_file('wash_indicators_by_block.gpkg', driver = 'GPKG')
+    gdf2.to_csv('wash_indicators_by_block.csv', index = False)
+    # !gsutil cp wash_indicators_by_block.gpkg gs://immap-wash-training/indicators/
+    # !gsutil cp wash_indicators_by_block.csv gs://immap-wash-training/indicators/
+    
+    print('wash_indicators_by_block.csv generated and transferred to GCS.')
+
 def distance_to_nearest(
     poi_type = 'restaurant',
     department = 'bogot_dc',
