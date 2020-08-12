@@ -27,8 +27,10 @@ instanced as (
 select * except(instance) from instanced where instance = 1;
 
 -- output table: mgn_urban_areas_distance_to_dept_capital
+-- takes 7mins
 select
 grid.id,
+grid.geometry,
 ST_DISTANCE(grid.centroid_geometry,area.centroid_geometry) distance_from_capital,
 ST_DISTANCE(grid.centroid_geometry,st_geogfromtext(area.geometry)) distance_from_capital_outskirts,
 grid.adm1_name,
@@ -105,6 +107,7 @@ where st_within(grid.centroid_geometry, st_geogfromtext(near.f0_.geometry));
 
 -- output table: urban_area_features
 select a.id,
+a.geometry geometry,
 pixelated_urban_area_id,
 distance_from_capital,
 distance_from_capital_outskirts,
