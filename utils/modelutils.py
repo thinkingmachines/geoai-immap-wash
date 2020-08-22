@@ -17,9 +17,9 @@ model_dir = data_dir + 'models/'
 scaler_dir = data_dir + 'scalers/'
 output_dir = data_dir + 'outputs/'
 
-def fit_test(clf, indicator, test_area, scale = True):
+def fit_test(df, clf, features, indicator, test_area, scale = True):
     global df_train, y_true, y_pred
-    raw_ = raw.copy()
+    raw_ = df.copy()
 
     df_train = raw_.query(f"adm1_name != '{test_area}'")
     df_test = raw_.query(f"adm1_name == '{test_area}'")
@@ -43,9 +43,9 @@ def fit_test(clf, indicator, test_area, scale = True):
     }
     return clf, metrics, scaler
 
-def fit_models():
+def fit_models(df, features, indicators, test_areas):
     recs = []
-    lr = Ridge(alpha=1.0)
+    lr = Ridge(alpha=1.0, random_state=42)
     rf = RandomForestRegressor(random_state=42)
     clfs = [lr, rf]
 
@@ -53,7 +53,7 @@ def fit_models():
         for model in clfs:
             for area in test_areas:
                 unfitted = clone(model)
-                fitted, metrics, scaler = fit_test(unfitted, indicator, area)
+                fitted, metrics, scaler = fit_test(df, unfitted, features, indicator, area)
                 model_type = str(type(fitted)).split('.')[-1].replace("'>", '')
                 rec = (
                     indicator,
@@ -73,16 +73,16 @@ def fit_models():
 
     return results
 
-def predict_on_holdout(results, indicator, area, model_type):
+def predict_on_holdout(df, results, features, indicator, area, model_type):
     row = (results
         .query(f"indicator == '{indicator}'")
         .query(f"model == '{model_type}'")
         .query(f"area == '{area}'"))
     model = joblib.load(model_dir + indicator + '_' + area + '_' + model_type + '.pkl')
     scaler = joblib.load(scaler_dir + indicator + '_' + area + '_' + model_type + '.pkl')
-    sub = raw.query(f"adm1_name == '{area}'")
+    sub = df.query(f"adm1_name == '{area}'")
     X = sub[features]
     X = scaler.transform(X)
     sub['pred_' + indicator] = model.predict(X)
-    keep_cols = ['adm1_name', 'id', 'geometry_x', indicator, 'pred_' + indicator]
+    keep_cols = ['adm1_name', 'id', 'geometry', indicator, 'pred_' + indicator]
     sub[keep_cols].to_csv(output_dir + indicator + '_' + area + '_' + model_type + '.csv', index = False)

@@ -1,5 +1,8 @@
-from bqutils import bq
+from bqutils import bq, run_sql
 import re
+import numpy as np
+from math import sqrt
+import geopandas as gpd
 
 project = 'immap-colombia-270609'
 dataset = 'wash_prep'
@@ -121,3 +124,100 @@ def process_by_dept(poi):
 
     bq(f'__cons', ' union all '.join(cons_query), dataset = 'temp', create_view = False)
     fill(poi)
+
+# code for spatial lagging
+# https://colab.research.google.com/drive/1Sahrwon3N4kvrNln7q68_577PZiCJ0uD?usp=sharing
+
+# dimensions of grid from qgis
+height = 1979 #1957
+width = 1660 #1655
+
+# shift all elements in matrix, 1 step along direction
+def right(mat): return np.roll(mat,1,axis=1);
+def left(mat): return np.roll(mat,-1,axis=1);
+def down(mat): return np.roll(mat,1,axis=0);
+def up(mat): return np.roll(mat,-1,axis=0);
+
+def spatial_lag(grid_ids, vals):
+    '''Averages neighboring values of a grid based on Queen contiguity'''
+    global neighbors, padded, grid_inds, matrix, matrix_of_ids
+
+    # fill gaps of grid ids with 0
+    max_ind = height*width
+    extended = np.arange(max_ind)
+    filled = np.zeros(max_ind)
+    # filled = filled - 999.999
+    filled[grid_ids] = np.array(vals) + 0.00001 # ensure values are nonzero
+    matrix = filled.reshape((height,width))
+    filled2 = np.zeros(max_ind)
+    filled2[grid_ids] = grid_ids
+    matrix_of_ids = filled2.reshape((height,width))
+
+    # add a boundary of 0s to surround the whole matrix
+    padded = np.zeros((height+2,width+2))
+    # padded = padded - 999.999
+    padded[1:height+1, 1:width+1] = matrix
+    grid_inds = np.argwhere(padded)# != -999.999)
+
+    neighbors = [
+        # straights
+        right(padded),
+        left(padded),
+        down(padded),
+        up(padded),
+
+        # diagonals
+        right(down(padded)),
+        left(down(padded)),
+        right(up(padded)),
+        left(up(padded)),
+    ]
+    sum_ = np.zeros((height+2,width+2))
+    count_ = np.zeros((height+2,width+2))
+    for neighbor in neighbors:
+        sum_ = sum_ + neighbor
+        count_ = count_ + (neighbor != 0)*1 #-999.999)*1
+    avg_ = sum_/count_
+
+    return avg_[grid_inds[:,0],grid_inds[:,1]]
+
+def check_val(grid_id, padded, neighbors):
+    '''input grid_id, output index in matrix + neighbors + average calculated'''
+    # grid_id = 1077163
+    inds = np.unravel_index(grid_id, shape = (height,width), order = 'C')
+    print(f'For grid_id: {grid_id}')
+    print('located in reshaped matrix at')
+    print(inds)
+    print('Indices of surrounding tiles here')
+    print(matrix_of_ids[inds[0]-1:inds[0]+2, inds[1]-1:inds[1]+2])
+    print('Values of surrounding tiles here')
+    print(matrix[inds[0]-1:inds[0]+2, inds[1]-1:inds[1]+2])
+    print('Value in padded matrix:')
+    print(padded[inds])
+    print('Values of Neighbors:')
+    for neighbor in neighbors:
+        print(neighbor[inds])
+
+def spatial_lag_workflow():
+    # 1. create unclipped grid from QGIS using GEE vegetation.tif
+
+    # 2. create unclipped_id from unclipped grid
+    # !gsutil cp gs://immap-wash-training/grid/grid_1x1km_unclipped.gpkg .
+    gdf = gpd.read_file('grid_1x1km_unclipped.gpkg', driver = 'GPKG').set_crs('EPSG:4326')
+    gdf = gdf.reset_index().rename(columns = {'index': 'unclipped_id'})
+    gdf.to_csv('grid_1x1km_unclipped.csv', index = False)
+    # !gsutil cp grid_1x1km_unclipped.csv gs://immap-wash-training/grid/
+
+    # 3. add features to grid via raster pierce code in 01_Data_Preprocessing
+    # grid_1x1km_wfeatures
+
+    # 4. join unclipped id to features
+    run_sql('grid_1x1km_wfeatures_wunclippedid.sql')
+    raw = pd.read_csv('grid_1x1km_wfeatures_wunclippedid.csv').sort_values('unclipped_id')
+
+    # 5. calculate spatial lags based on edge adjacency of grids
+    df = raw.copy()#[raw.adm1_name == dept]
+    for feature in tqdm(features):
+        grid_ids = list(df['unclipped_id'])
+        vals = list(df[feature])
+        df['lag_' + feature] = spatial_lag(grid_ids, vals)
