@@ -57,7 +57,7 @@ from aggregate
 ORDER BY
   10 DESC;
 
--- output table: aggregated_blocks_to_grid
+-- output table: aggregated_blocks_to_grid_unfiltered
 select 
 id, st_astext(geometry) geometry,
 
@@ -89,8 +89,11 @@ sum(d_c_cocina) d_c_cocina,
 sum(d_c_gas) d_c_gas,
 
 from wash_prep.join_blocks_to_grid
-where id in (select id from wash_prep.grids_with_mostly_null_blocks where null_ratio between 0 and 1)
 group by 2,1;
+
+-- output table: aggregated_blocks_to_grid
+select * from wash_prep.aggregated_blocks_to_grid_unfiltered
+where id in (select id from wash_prep.grids_with_mostly_null_blocks where null_ratio between 0 and 1);
 
 -- output table: indicator_labelled_grid
 select
