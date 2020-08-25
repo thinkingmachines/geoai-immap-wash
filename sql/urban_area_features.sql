@@ -27,7 +27,6 @@ instanced as (
 select * except(instance) from instanced where instance = 1;
 
 -- output table: mgn_urban_areas_distance_to_dept_capital
--- takes 7mins
 select
 grid.id,
 grid.geometry,

@@ -1,15 +1,25 @@
-from bqutils import bq, run_sql
+# !pip install -q rasterio geopandas
+# !pip install scikit-learn==0.22.2.post1
 import re
 import numpy as np
+import pandas as pd
 from math import sqrt
 import geopandas as gpd
+import rasterio as rio
+from shapely.wkt import loads
+from tqdm import tqdm
+import re
+
+from bqutils import bq, run_sql
+from settings import *
 
 project = 'immap-colombia-270609'
 dataset = 'wash_prep'
 
 def generate_blocks_geopackage(gdf, adm):
     '''
-    Generates wash_indicators_by_block.csv, the raw blocks dataset converted to geopackage format
+    From raw blocks dataset, add admin boundaries, rename relevant wash indicators
+    Output: wash_indicators_by_block.csv, the raw blocks dataset converted to geopackage format
     
     Steps:
     1. Generate grid boxes for whole Colombia using QGIS (grid_1x1km.gpkg)
@@ -46,6 +56,36 @@ def generate_blocks_geopackage(gdf, adm):
     # !gsutil cp wash_indicators_by_block.csv gs://immap-wash-training/indicators/
     
     print('wash_indicators_by_block.csv generated and transferred to GCS.')
+
+def generate_indicator_labelled_grid():
+    # blocks = gpd.read_file(feats_dir + 'Manzanas_urbano/Manzanas_urbano.shp')
+    # adm = gpd.read_file(feats_dir + 'admin_bounds.gpkg', driver = 'GPKG')
+    # geoutils.generate_blocks_geopackage(blocks, adm)
+    # bqutils.run_sql(sql_dir + 'indicator_labelled_grid.sql')
+
+    df = pd.read_csv(inds_dir + 'indicator_labelled_grid.csv')
+    df['centroid_geometry'] = df['centroid_geometry'].apply(loads)
+    gdf = gpd.GeoDataFrame(df, geometry='centroid_geometry').set_crs('EPSG:4326')
+    return gdf
+
+def generate_satellite_features(gdf):
+    # satellite image derived - pierce through rasters
+    geom_col = 'centroid_geometry'
+
+    for feature in tqdm(poi_features + satellite_features):
+        tif_file = feats_dir + f'2018_{area}_{feature}.tif'
+        raster = rio.open(tif_file)
+
+        # Perform point sampling
+        pxl = []
+        for index, row in gdf.iterrows():
+            for val in raster.sample([(row[geom_col].x, row[geom_col].y)]):
+                pxl.append(val[0])
+
+        # Add column to geodataframe
+        col_name = feature.replace('clipped_','')
+        gdf[col_name] = pxl
+    return gdf
 
 def distance_to_nearest(
     poi_type = 'restaurant',
@@ -110,9 +150,8 @@ def get_depts():
         project_id = 'immap-colombia-270609')
     return list(df.adm1_name)
 
-def process_by_dept(poi):
+def generate_poi_features_by_dept(poi):
     # apply distance to nearest, 1 department at a time
-
     cons_query = []
 
     for dept in tqdm(depts):
@@ -125,12 +164,41 @@ def process_by_dept(poi):
     bq(f'__cons', ' union all '.join(cons_query), dataset = 'temp', create_view = False)
     fill(poi)
 
+def generate_urban_area_features():
+    '''
+    Generates BQ table of urban area features
+    
+    Steps:
+    1. From Urban_Areas_COL, dissolve via QGIS
+    2. Upload to BQ table as mgn_urban_areas
+    '''
+    bqutils.run_sql(sql_dir + 'urban_area_features.sql')
+    
+def generate_training_data(gdf):
+    ua_feats = pd.read_csv(feats_dir + 'urban_area_features.csv').drop(labels = ['geometry'], axis = 1)
+    lag_feats = pd.read_csv(feats_dir + 'grid_1x1km_wfeatures_lagged.csv')
+    cols = ['id'] + [text for text in list(lag_feats.columns) if re.search('lag_*', text) is not None]
+    lag_feats = lag_feats[cols]
+    
+    # master table
+    df_ = pd.merge(gdf, ua_feats, how = 'left', on = 'id')
+    df = pd.merge(df_, lag_feats, how = 'left', on = 'id')
+
+    # add night time lights mean
+    mean_col = df.groupby('pixelated_urban_area_id')['nighttime_lights'].mean() # don't reset the index!
+    df = df.set_index('pixelated_urban_area_id') # make the same index here
+    df['nighttime_lights_area_mean'] = mean_col
+
+    # format for R-INLA
+    df['x'] = df['centroid_geometry'].x
+    df['y'] = df['centroid_geometry'].y
+
+    train_df = df.reset_index()
+    return train_df
+
+
 # code for spatial lagging
 # https://colab.research.google.com/drive/1Sahrwon3N4kvrNln7q68_577PZiCJ0uD?usp=sharing
-
-# dimensions of grid from qgis
-height = 1979 #1957
-width = 1660 #1655
 
 # shift all elements in matrix, 1 step along direction
 def right(mat): return np.roll(mat,1,axis=1);
@@ -198,26 +266,33 @@ def check_val(grid_id, padded, neighbors):
     for neighbor in neighbors:
         print(neighbor[inds])
 
-def spatial_lag_workflow():
-    # 1. create unclipped grid from QGIS using GEE vegetation.tif
+def generate_spatial_lag_features():
+    '''
+    Generate spatial lagged features. This function performs steps 4 and 5, 1-3 are done manually via QGIS
+    
+    Steps
+    1. create unclipped grid from QGIS using GEE vegetation.tif
+    2. create unclipped_id from unclipped grid via
 
-    # 2. create unclipped_id from unclipped grid
-    # !gsutil cp gs://immap-wash-training/grid/grid_1x1km_unclipped.gpkg .
-    gdf = gpd.read_file('grid_1x1km_unclipped.gpkg', driver = 'GPKG').set_crs('EPSG:4326')
-    gdf = gdf.reset_index().rename(columns = {'index': 'unclipped_id'})
-    gdf.to_csv('grid_1x1km_unclipped.csv', index = False)
-    # !gsutil cp grid_1x1km_unclipped.csv gs://immap-wash-training/grid/
+        !gsutil cp gs://immap-wash-training/grid/grid_1x1km_unclipped.gpkg .
+        gdf = gpd.read_file('grid_1x1km_unclipped.gpkg', driver = 'GPKG').set_crs('EPSG:4326')
+        gdf = gdf.reset_index().rename(columns = {'index': 'unclipped_id'})
+        gdf.to_csv('grid_1x1km_unclipped.csv', index = False)
+        !gsutil cp grid_1x1km_unclipped.csv gs://immap-wash-training/grid/
+        
+    3. add features to grid via raster pierce code in 01_Data_Preprocessing (grid_1x1km_wfeatures)
+    4. join unclipped id to features
+    5. calculate spatial lags based on edge adjacency of grids
+    '''
 
-    # 3. add features to grid via raster pierce code in 01_Data_Preprocessing
-    # grid_1x1km_wfeatures
+    run_sql(sql_dir + 'grid_1x1km_wfeatures_wunclippedid.sql')
+    # !gsutil cp gs://immap-wash-training/grid/grid_1x1km_wfeatures_wunclippedid.csv {feats_dir}
+    raw = pd.read_csv(feats_dir + 'grid_1x1km_wfeatures_wunclippedid.csv').sort_values('unclipped_id')
 
-    # 4. join unclipped id to features
-    run_sql('grid_1x1km_wfeatures_wunclippedid.sql')
-    raw = pd.read_csv('grid_1x1km_wfeatures_wunclippedid.csv').sort_values('unclipped_id')
-
-    # 5. calculate spatial lags based on edge adjacency of grids
     df = raw.copy()#[raw.adm1_name == dept]
     for feature in tqdm(features):
         grid_ids = list(df['unclipped_id'])
         vals = list(df[feature])
         df['lag_' + feature] = spatial_lag(grid_ids, vals)
+        
+    df.to_csv(feats_dir + 'grid_1x1km_wfeatures_lagged.csv')

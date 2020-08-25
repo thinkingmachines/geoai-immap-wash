@@ -59,3 +59,31 @@ def bq(table_name, query, dataset = dataset, create_view = True, dry_run = False
 # bq('', """
 
 # """)
+
+def run_sql(filename, dataset = dataset, replace = None):
+    '''
+    Runs a sql file, affecting BQ dataset, replacing parts of the script
+    
+    Args
+        replace (dict): in the format {'str_to_replace': 'replacement'}
+    '''
+    with open(filename) as file:
+        script = file.read()
+    if replace is not None:
+        for k, v in replace.items():
+            script = script.replace(k, v)
+    for snippet in script.split(';'):
+        # check first if it's a valid SQL query.
+        if re.search('(select)|(from)', snippet, re.IGNORECASE):
+            # that should already be the query
+            query = snippet.strip()
+            # get table name
+            first_line = query.split('\n')[0]
+            table_name = first_line[first_line.find(': ')+2:]
+            # execute query
+            bq(
+                table_name,
+                query,
+                dataset
+            )
+            print()

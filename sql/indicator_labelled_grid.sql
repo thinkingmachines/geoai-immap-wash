@@ -21,7 +21,8 @@ inds.* except(geometry)
 from
 wash_prep.wash_indicators_by_block inds
 , wash_prep.grid_1x1km grid
-where st_within(st_centroid(st_geogfromtext(inds.geometry)), st_geogfromtext(grid.geometry));
+where st_within(st_centroid(st_geogfromtext(inds.geometry)), st_geogfromtext(grid.geometry))
+and adm1_name = '{adm1_name}';
 
 -- output table: grids_with_mostly_null_blocks
 with classify as (
