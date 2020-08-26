@@ -57,13 +57,18 @@ def generate_blocks_geopackage(gdf, adm):
     
     print('wash_indicators_by_block.csv generated and transferred to GCS.')
 
-def generate_indicator_labelled_grid():
+def generate_indicator_labelled_grid(for_ = 'u'):
+    "for_ can be 'u' or 'r', urban or rural"
     # blocks = gpd.read_file(feats_dir + 'Manzanas_urbano/Manzanas_urbano.shp')
     # adm = gpd.read_file(feats_dir + 'admin_bounds.gpkg', driver = 'GPKG')
     # geoutils.generate_blocks_geopackage(blocks, adm)
     # bqutils.run_sql(sql_dir + 'indicator_labelled_grid.sql')
-
-    df = pd.read_csv(inds_dir + 'indicator_labelled_grid.csv')
+    # bqutils.run_sql(sql_dir + 'indicator_labelled_grid_rural.sql')
+    
+    if for_ == 'u':
+        df = pd.read_csv(inds_dir + 'indicator_labelled_grid.csv')
+    else:
+        df = pd.read_csv(inds_dir + 'indicator_labelled_grid_rural.csv')
     df['centroid_geometry'] = df['centroid_geometry'].apply(loads)
     gdf = gpd.GeoDataFrame(df, geometry='centroid_geometry').set_crs('EPSG:4326')
     return gdf
@@ -71,8 +76,10 @@ def generate_indicator_labelled_grid():
 def generate_satellite_features(gdf):
     # satellite image derived - pierce through rasters
     geom_col = 'centroid_geometry'
-
-    for feature in tqdm(poi_features + satellite_features):
+    satellite_features_ = satellite_features + ['nearest_highway']
+    pois_ = ['waterway', 'commercial', 'restaurant', 'hospital', 'airport']
+    poi_features_ = ['clipped_nearest_' + poi for poi in pois_]
+    for feature in tqdm(poi_features_ + satellite_features_):
         tif_file = feats_dir + f'2018_{area}_{feature}.tif'
         raster = rio.open(tif_file)
 
@@ -164,37 +171,79 @@ def generate_poi_features_by_dept(poi):
     bq(f'__cons', ' union all '.join(cons_query), dataset = 'temp', create_view = False)
     fill(poi)
 
+# overrides GeoPandasBase method
+# https://github.com/martinfleis/geopandas/blob/0a749f95f8476f145788a8a2a14b71418232912e/geopandas/geodataframe.py
+def explode(self):
+    """
+    Explode muti-part geometries into multiple single geometries.
+    Each row containing a multi-part geometry will be split into
+    multiple rows with single geometries, thereby increasing the vertical
+    size of the GeoDataFrame.
+    The index of the input geodataframe is no longer unique and is
+    replaced with a multi-index (original index with additional level
+    indicating the multiple geometries: a new zero-based index for each
+    single part geometry per multi-part geometry).
+    Returns
+    -------
+    GeoDataFrame
+        Exploded geodataframe with each single geometry
+        as a separate entry in the geodataframe.
+    """
+    df_copy = self.copy()
+
+    df_copy["__order"] = range(len(df_copy))
+
+    exploded_geom = df_copy.geometry.explode().reset_index(level=-1)
+    exploded_index = exploded_geom.columns[0]
+
+    df = pd.merge(
+        df_copy.drop(df_copy._geometry_column_name, axis=1),
+        exploded_geom,
+        left_index=True,
+        right_index=True,
+        sort=False,
+        how="left",
+    )
+    # reset to MultiIndex, otherwise df index is only first level of
+    # exploded GeoSeries index.
+    df.set_index(exploded_index, append=True, inplace=True)
+    df.index.names = list(self.index.names) + [None]
+    df.sort_values("__order", inplace=True)
+    geo_df = df.set_geometry(self._geometry_column_name).drop("__order", axis=1)
+    return geo_df
+
+def dissolve_via_code():
+    df = pd.read_csv(data_dir + 'aggregated_blocks_to_grid_unfiltered.csv')
+    df['geometry'] = df['geometry'].apply(wkt.loads)
+    df['agg'] = 'colombia'
+    gdf = gpd.GeoDataFrame(df, geometry = 'geometry')
+
+    multipart = gdf.dissolve(by = 'agg')
+    singleparts = explode(multipart)
+
+    singleparts = singleparts.reset_index().reset_index().rename(columns = {'index': 'id'})
+    singleparts.to_csv(data_dir + 'prep/01_dissolve_code.csv', index = False)
+
+def explode_manual_dissolved():
+    gdf = gpd.read_file(data_dir + 'prep/02_dissolve_manual.gpkg', driver = 'GPKG')
+    singleparts = explode(gdf.drop(labels = ['id', 'id_1', 'level_1'], axis = 1))
+    singleparts = singleparts.reset_index().reset_index().rename(columns = {'index': 'id'})
+    singleparts.to_csv(data_dir + '20200810_pixelated_urban_areas.csv', index = False)
+    
 def generate_urban_area_features():
     '''
     Generates BQ table of urban area features
     
     Steps:
     1. From Urban_Areas_COL, dissolve via QGIS
-    2. Upload to BQ table as mgn_urban_areas
+    2. dissolve_via_code() - first dissolve grids to pixelated urban area polygons, still has lines inside polygons
+    3. dissolve manually - remove points inside polygons via QGIS
+    4. explode_manual_dissolved() - explode QGIS output
+    5. Upload to BQ table as mgn_urban_areas
     '''
+    dissolve_via_code()
+    explode_manual_dissolved()
     bqutils.run_sql(sql_dir + 'urban_area_features.sql')
-    
-def generate_training_data(gdf):
-    ua_feats = pd.read_csv(feats_dir + 'urban_area_features.csv').drop(labels = ['geometry'], axis = 1)
-    lag_feats = pd.read_csv(feats_dir + 'grid_1x1km_wfeatures_lagged.csv')
-    cols = ['id'] + [text for text in list(lag_feats.columns) if re.search('lag_*', text) is not None]
-    lag_feats = lag_feats[cols]
-    
-    # master table
-    df_ = pd.merge(gdf, ua_feats, how = 'left', on = 'id')
-    df = pd.merge(df_, lag_feats, how = 'left', on = 'id')
-
-    # add night time lights mean
-    mean_col = df.groupby('pixelated_urban_area_id')['nighttime_lights'].mean() # don't reset the index!
-    df = df.set_index('pixelated_urban_area_id') # make the same index here
-    df['nighttime_lights_area_mean'] = mean_col
-
-    # format for R-INLA
-    df['x'] = df['centroid_geometry'].x
-    df['y'] = df['centroid_geometry'].y
-
-    train_df = df.reset_index()
-    return train_df
 
 
 # code for spatial lagging
@@ -273,7 +322,6 @@ def generate_spatial_lag_features():
     Steps
     1. create unclipped grid from QGIS using GEE vegetation.tif
     2. create unclipped_id from unclipped grid via
-
         !gsutil cp gs://immap-wash-training/grid/grid_1x1km_unclipped.gpkg .
         gdf = gpd.read_file('grid_1x1km_unclipped.gpkg', driver = 'GPKG').set_crs('EPSG:4326')
         gdf = gdf.reset_index().rename(columns = {'index': 'unclipped_id'})
@@ -296,3 +344,25 @@ def generate_spatial_lag_features():
         df['lag_' + feature] = spatial_lag(grid_ids, vals)
         
     df.to_csv(feats_dir + 'grid_1x1km_wfeatures_lagged.csv')
+
+def generate_training_data(gdf):
+    ua_feats = pd.read_csv(feats_dir + 'urban_area_features.csv').drop(labels = ['geometry'], axis = 1)
+    lag_feats = pd.read_csv(feats_dir + 'grid_1x1km_wfeatures_lagged.csv')
+    cols = ['id'] + [text for text in list(lag_feats.columns) if re.search('lag_*', text) is not None]
+    lag_feats = lag_feats[cols]
+    
+    # master table
+    df_ = pd.merge(gdf, ua_feats, how = 'left', on = 'id')
+    df = pd.merge(df_, lag_feats, how = 'left', on = 'id')
+
+    # add night time lights mean
+    mean_col = df.groupby('pixelated_urban_area_id')['nighttime_lights'].mean() # don't reset the index!
+    df = df.set_index('pixelated_urban_area_id') # make the same index here
+    df['nighttime_lights_area_mean'] = mean_col
+
+    # format for R-INLA
+    df['x'] = df['centroid_geometry'].x
+    df['y'] = df['centroid_geometry'].y
+
+    train_df = df.reset_index()
+    return train_df

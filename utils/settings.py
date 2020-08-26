@@ -4,7 +4,7 @@ feats_dir = data_dir + 'features/'
 inds_dir = data_dir + 'indicators/'
 model_dir = data_dir + 'models/'
 scaler_dir = data_dir + 'scalers/'
-output_dir = data_dir + 'outputs/'
+preds_dir = data_dir + 'predictions/'
 sql_dir = '../sql/'
 
 area = 'colombia'
@@ -28,28 +28,12 @@ satellite_features = [
     'population',
     'elevation',
     'urban_index',
-    'nearest_highway',
 ]
 
-pois = ['waterway', 'commercial', 'restaurant', 'hospital', 'airport']
-poi_features = ['clipped_nearest_' + poi for poi in pois]
+pois = ['waterway', 'commercial', 'restaurant', 'hospital', 'airport', 'highway']
+poi_features = ['nearest_' + poi for poi in pois]
 
-features = [
-    'vegetation',
-    'temperature',
-    'population',
-    'nighttime_lights',
-    'aridity_cgiarv2',
-    'elevation',
-    'urban_index',
-
-    'nearest_waterway',
-    'nearest_commercial',
-    'nearest_restaurant',
-    'nearest_hospital',
-    'nearest_airport',
-    'nearest_highway',
-
+urban_features = [
     #'pixelated_urban_area_id',
     'distance_from_capital',
     'distance_from_capital_outskirts',
@@ -57,7 +41,9 @@ features = [
     'pixelated_urban_area_size',
     #'distance_to_nearest_pixelated_urban_area',
     'nighttime_lights_area_mean',
-    
+]
+
+lag_features = [
     'lag_nearest_waterway',
     'lag_nearest_commercial',
     'lag_nearest_restaurant',
@@ -70,12 +56,7 @@ features = [
     'lag_population',
     'lag_elevation',
     'lag_urban_index',
-    'lag_nearest_highway'
+    'lag_nearest_highway',
 ]
 
-test_areas = [
-    'bogot_dc',
-    'norte_de_santander',
-    'la_guajira',
-    'nario'
-]
+features = satellite_features + poi_features # + urban_features + lag_features
