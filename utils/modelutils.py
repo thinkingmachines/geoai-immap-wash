@@ -19,6 +19,15 @@ from sklearn.base import clone
 from settings import data_dir, model_dir, scaler_dir, preds_dir
 
 def calculate_metrics(y_true, y_pred):
+    '''
+    Calculates metrics of accuracy between actual values and model predicted values.
+    
+    Args
+        y_true (list): Actual WASH indicator values
+        y_pred (list): Model predicted values
+    Returns
+        (dict): Dictionary of correlation, r-squared, mean absolute error, and root mean squared error
+    '''
     return {
         'correlation': pearsonr(y_true, y_pred)[0],
         'r2': pearsonr(y_true, y_pred)[0]**2,#r2_score(y_true, y_pred),
@@ -27,7 +36,21 @@ def calculate_metrics(y_true, y_pred):
     }
 
 def _fit_with_one_holdout(df, clf, features, indicator, test_area, scale = True):
-    '''Returns fitted model, metrics, and scaler'''
+    '''
+    Trains input model for input indicator using input features, holding out input test_area
+    
+    Args
+        df (dataframe): dataset source of training data
+        clf (sklearn model): unfitted model
+        features (list of str): list of features used for training
+        indicator (str): indicator being modelled
+        test_area (str): area to serve as testing data
+        scale (bool): scale features based sklearn RobustScaler
+    Returns 
+        clf (sklearn model): fitted model
+        metrics (dict): dictionary of accuracies from calculate_metrics()
+        scaler (sklearn object): fitted scaler object on train data
+    '''
     global df_train, y_true, y_pred
     raw_ = df.copy()
 
@@ -50,8 +73,19 @@ def _fit_with_one_holdout(df, clf, features, indicator, test_area, scale = True)
 
 def fit_models(df, features, indicators, test_areas, prefix = ''):
     '''
-    Loops model fitting over test areas
-    Saves models and scalers as pkl files
+    Wrapper function that:
+    - Runs _fit_with_one_holdout() over test areas
+    - Creates sklearn model objects, 1 Ridge Regressor and 1 Random Forest Regressor
+    - Saves models and scalers as pkl files to model and scaler dirs specified in settings.py
+    
+    Args
+        df (dataframe): dataset source of training data
+        features (list of str): list of features used for training
+        indicators (list of str): list of indicators being modelled
+        test_areas (list of str): list of areas to serve as testing data
+        prefix (str): prefix added to filename used in saving pkl files
+    Returns
+        results (DataFrame): aggregated table of accuracies, broken down based on indicator, model type, and test area
     '''
     recs = []
     lr = Ridge(alpha=1.0, random_state=42)
@@ -95,8 +129,19 @@ def fit_models(df, features, indicators, test_areas, prefix = ''):
 
 def _predict_one_holdout_area(df, features, indicator, area, model_type, prefix = ''):
     '''
-    Predicts using a saved model and scaler from pkl files
-    Outputs a csv file of grid-level predictions
+    Wrapper function that
+    - Predicts using a saved model and scaler from pkl files
+    - Outputs a csv file of grid-level predictions
+    
+    Args
+        df (dataframe): dataset source of training data
+        features (list of str): list of features used for training
+        indicator (str): indicator being modelled
+        area (str): area to serve as testing data
+        model_type (str): type of sklearn model e.g. RandomForestRegressor
+        prefix (str): prefix added to filename used in saving pkl files
+    Returns
+        None
     '''
     model = joblib.load(model_dir + prefix + '_' + indicator + '_' + area + '_' + model_type + '.pkl')
     scaler = joblib.load(scaler_dir + prefix + '_' + indicator + '_' + area + '_' + model_type + '.pkl')
@@ -108,8 +153,15 @@ def _predict_one_holdout_area(df, features, indicator, area, model_type, prefix 
     sub[keep_cols].to_csv(preds_dir + prefix + '_' + indicator + '_' + area + '_' + model_type + '.csv', index = False)
 
 def find_ind(text):
-    "finds indicator text in filename"
-    #text = 'all_perc_hh_no_toilet_bogot_dc_RandomForestRegressor.csv'
+    '''
+    Finds indicator text in filename 
+    
+    Args
+        text (str): filename, e.g. 'all_perc_hh_no_toilet_bogot_dc_RandomForestRegressor.csv'
+    Returns
+        ind (str): indicator text, e.g. 'toilet'
+    '''
+    #text = 
     m1 = re.search('water', text)
     m2 = re.search('toilet', text)
     m3 = re.search('sewage', text)
@@ -125,8 +177,18 @@ def find_ind(text):
 
 def predict_on_holdout_areas(df, test_areas, features, indicators, prefix = ''):
     '''
-    Loops prediction across holdout areas
-    Consolidates to one csv file of grid-level predictions
+    Wrapper function that
+    - Runs _predict_one_holdout_area() across holdout areas
+    - Consolidates to one csv file of grid-level predictions
+    
+    Args
+        df (dataframe): dataset source of training data
+        test_areas (list of str): list of areas to serve as testing data
+        features (list of str): list of features used for training
+        indicators (list of str): list of indicators being modelled
+        prefix (str): prefix added to filename used in saving pkl files
+    Returns
+        None
     '''
     out_file = f'{prefix}_predictions.csv'
     for indicator in tqdm(indicators):
@@ -149,6 +211,14 @@ def predict_on_holdout_areas(df, test_areas, features, indicators, prefix = ''):
     mega_df.to_csv(data_dir + out_file, index= False)
     
 def evaluate_results(indicators, prefix = ''):
+    '''
+    Prints out accuracy metrics and scatter plots of actual value vs predicted
+    
+    Args
+        indicators (list of str): list of indicators to evaluate on
+    Returns
+        None
+    '''
     out_file = f'{prefix}_predictions.csv'
     for indicator in indicators:
         print(indicator)

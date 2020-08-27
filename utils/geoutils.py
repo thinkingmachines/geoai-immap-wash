@@ -26,9 +26,11 @@ def generate_blocks_geopackage(gdf, adm):
     2. Run function to get wash_indicators_by_block.csv
     3. Upload wash_indicators_by_block to BQ then process using indicator_labelled_grid.sql
     
-    Input:
-    gdf - GeoDataFrame of raw blocks dataset
-    adm - GeoDataFrame of admin boundaries in Colombia
+    Args
+        gdf (GeoDataFrame): of raw blocks dataset
+        adm (GeoDataFrame): of admin boundaries in Colombia
+    Returns
+        None
     '''
     
     def sub(text, start,end): 
@@ -58,7 +60,21 @@ def generate_blocks_geopackage(gdf, adm):
     print('wash_indicators_by_block.csv generated and transferred to GCS.')
 
 def generate_indicator_labelled_grid(for_ = 'u'):
-    "for_ can be 'u' or 'r', urban or rural"
+    '''
+    Generates 1x1km grid labelled with WASH indicators based on aggregations of the wash blocks/points dataset.
+    
+    Args
+        for_ (str): can be 'u' or 'r', urban or rural
+    Returns
+        gdf (GeoDataFrame): labelled grid
+    '''
+    
+    # Load data from GCS
+    # !gsutil cp gs://immap-masks/admin_boundaries/admin_bounds.gpkg {feats_dir}
+    # !gsutil cp gs://immap-wash-training/indicators/Manzanas_urbano.zip {feats_dir}
+    # !unzip {feats_dir}Manzanas_urbano.zip
+    
+    # Generate grid labelled with indicators, based on aggregations of blocks
     # blocks = gpd.read_file(feats_dir + 'Manzanas_urbano/Manzanas_urbano.shp')
     # adm = gpd.read_file(feats_dir + 'admin_bounds.gpkg', driver = 'GPKG')
     # geoutils.generate_blocks_geopackage(blocks, adm)
@@ -74,6 +90,14 @@ def generate_indicator_labelled_grid(for_ = 'u'):
     return gdf
 
 def generate_satellite_features(gdf):
+    '''
+    Generates features derived from satellite images by piercing through rasters using the centroids of the grid from gdf
+    
+    Args
+        gdf (GeoDataFrame): indicator labelled grid
+    Returns
+        gdf (GeoDataFrame): indicator labelled grid with features
+    '''
     # satellite image derived - pierce through rasters
     geom_col = 'centroid_geometry'
     satellite_features_ = satellite_features + ['nearest_highway']
@@ -107,7 +131,9 @@ def distance_to_nearest(
 ):
     """
     Creates BQ query that finds distance nearest to a table of pois (destination)
-    origin dataset coords column vs destination dataset poi_coords column - formatted as WK
+    
+    Returns
+        (str): query calculating distance to nearest
     """
     query = f"""WITH all_dists AS (
                 WITH destination AS (
@@ -141,6 +167,14 @@ def distance_to_nearest(
     return re.sub('[ ]+', ' ', query).replace('\n', ' ')
 
 def fill(poi):
+    '''
+    Runs a query to impute null values from the distance to nearest calculation, with 40kilometers
+    
+    Args
+        poi (str): kind of poi to impute for
+    Returns
+        None
+    '''
     bq(f'nearest_{poi}',f"""
     select
     base.id, base.geometry, coalesce(cons.f0_.dist, 40000) dist,
@@ -152,13 +186,26 @@ def fill(poi):
     create_view = True)
 
 def get_depts():
+    '''
+    Gets the departments in Colombia from the BQ table
+    
+    Returns
+        (list of str): admin 1 names
+    '''
     df = pandas_gbq.read_gbq(
             'SELECT adm1_name, count(id) cnt FROM `wash_prep.grid_1x1km_wadmin` group by 1 order by 2 desc', 
         project_id = 'immap-colombia-270609')
     return list(df.adm1_name)
 
 def generate_poi_features_by_dept(poi):
-    # apply distance to nearest, 1 department at a time
+    '''
+    Apply distance to nearest, 1 department at a time
+    
+    Args
+        poi (str): poi type to generate for
+    Returns
+        None
+    '''
     cons_query = []
 
     for dept in tqdm(depts):
@@ -213,6 +260,12 @@ def explode(self):
     return geo_df
 
 def dissolve_via_code():
+    '''
+    Workflow to dissolve grid boundaries, used for generating urban area features
+    
+    Returns
+        None
+    '''
     df = pd.read_csv(data_dir + 'aggregated_blocks_to_grid_unfiltered.csv')
     df['geometry'] = df['geometry'].apply(wkt.loads)
     df['agg'] = 'colombia'
@@ -225,6 +278,12 @@ def dissolve_via_code():
     singleparts.to_csv(data_dir + 'prep/01_dissolve_code.csv', index = False)
 
 def explode_manual_dissolved():
+    '''
+    Workflow to separate single polygons from dissolved multipart polygons
+    
+    Returns
+        None
+    '''
     gdf = gpd.read_file(data_dir + 'prep/02_dissolve_manual.gpkg', driver = 'GPKG')
     singleparts = explode(gdf.drop(labels = ['id', 'id_1', 'level_1'], axis = 1))
     singleparts = singleparts.reset_index().reset_index().rename(columns = {'index': 'id'})
@@ -240,6 +299,9 @@ def generate_urban_area_features():
     3. dissolve manually - remove points inside polygons via QGIS
     4. explode_manual_dissolved() - explode QGIS output
     5. Upload to BQ table as mgn_urban_areas
+    
+    Returns
+        None
     '''
     dissolve_via_code()
     explode_manual_dissolved()
@@ -256,7 +318,15 @@ def down(mat): return np.roll(mat,1,axis=0);
 def up(mat): return np.roll(mat,-1,axis=0);
 
 def spatial_lag(grid_ids, vals):
-    '''Averages neighboring values of a grid based on Queen contiguity'''
+    '''
+    Averages neighboring values of a grid based on Queen contiguity
+    
+    Args
+        grid_ids (list of str): grid indices to calculate lags for
+        vals (list of flt): feature values to calculate lags on
+    Returns
+        (list of flt): lagged feature values
+    '''
     global neighbors, padded, grid_inds, matrix, matrix_of_ids
 
     # fill gaps of grid ids with 0
@@ -299,7 +369,14 @@ def spatial_lag(grid_ids, vals):
     return avg_[grid_inds[:,0],grid_inds[:,1]]
 
 def check_val(grid_id, padded, neighbors):
-    '''input grid_id, output index in matrix + neighbors + average calculated'''
+    '''
+    Sense check values of spatial lag calculation
+    
+    Args
+        grid_id (str): grid index to inspect
+    Returns
+        None
+    '''
     # grid_id = 1077163
     inds = np.unravel_index(grid_id, shape = (height,width), order = 'C')
     print(f'For grid_id: {grid_id}')
@@ -331,6 +408,9 @@ def generate_spatial_lag_features():
     3. add features to grid via raster pierce code in 01_Data_Preprocessing (grid_1x1km_wfeatures)
     4. join unclipped id to features
     5. calculate spatial lags based on edge adjacency of grids
+    
+    Returns
+        None
     '''
 
     run_sql(sql_dir + 'grid_1x1km_wfeatures_wunclippedid.sql')
@@ -346,6 +426,14 @@ def generate_spatial_lag_features():
     df.to_csv(feats_dir + 'grid_1x1km_wfeatures_lagged.csv')
 
 def generate_training_data(gdf):
+    '''
+    Generates training data from generated indicators and features
+    
+    Args
+        gdf (GeoDataFrame): output from generate_satellite_features()
+    Returns
+        train_df (dataframe): training data
+    '''
     ua_feats = pd.read_csv(feats_dir + 'urban_area_features.csv').drop(labels = ['geometry'], axis = 1)
     lag_feats = pd.read_csv(feats_dir + 'grid_1x1km_wfeatures_lagged.csv')
     cols = ['id'] + [text for text in list(lag_feats.columns) if re.search('lag_*', text) is not None]
