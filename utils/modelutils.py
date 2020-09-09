@@ -15,6 +15,10 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler, RobustScaler
 from sklearn.externals import joblib
 from sklearn.base import clone
+from sklearn.model_selection import KFold
+
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from settings import data_dir, model_dir, scaler_dir, preds_dir
 
@@ -226,3 +230,121 @@ def evaluate_results(indicators, prefix = ''):
         df = pd.read_csv(data_dir + out_file).query(f"indicator == '{ind}'")
         print(calculate_metrics(df['y_true'], df['y_pred']))
         df.plot(x = 'y_true', y = 'y_pred', kind = 'scatter', figsize = (5,5), xlim = (0,1), ylim = (0,1), title = indicator)
+        
+def check_nulls_and_outliers(df, columns = None):
+    '''
+    1. Find rows missing some values
+    2. Find outliers
+    '''
+    if columns is None:
+        columns = df.columns
+    
+    sub = df[columns]
+    rows, cols = df.shape
+    print(f'Total rows: {rows}')
+    print('Variables with missing values:')
+    print(sub.describe().transpose().query(f"count < {rows}")[['count', 'mean', 'std', 'min', 'max']])
+    scaler = MinMaxScaler()
+    scaler.fit(sub)
+    scaler.transform(sub)
+    sub.boxplot(figsize=(12,4))
+
+def average_results(df, iterate_over = 'adm1_name', prefix = 'all'):
+    '''
+    Calculate accuracies by calculating per subgroup, then averaging across all subgroups
+    
+    Args
+        df (DataFrame): source of training data
+        iterate_over (str): column over which to iterate, i.e. subgroups used for calculation
+        prefix (str): string prepended to saved csv file
+    Returns
+        None
+    '''
+    inds = list(df.indicator.unique())
+    dfs = []
+    for ind in inds:
+        ind_ = ind.replace('perc_hh_no_', '').split('_')[0]
+        print(f"Access to {ind_}")
+        sub1 = df.query(f"indicator == '{ind}'")
+        list_ = list(sub1[iterate_over].unique())
+        recs = []
+        for item in list_:
+            sub2 = sub1.query(f"{iterate_over} == '{item}'")
+            metrics_ = calculate_metrics(sub2['y_true'], sub2['y_pred'])
+            recs.append((ind_, item, metrics_['correlation'], metrics_['r2'], metrics_['rmse']))
+        df_ = pd.DataFrame(recs, columns = ['indicator', iterate_over, 'correlation', 'r2', 'rmse']).set_index(iterate_over)
+        print(df_.mean())
+        dfs.append(df_)
+    res = pd.concat(dfs, axis = 0)
+    # res.to_csv(data_dir + prefix + '_' + indicator + '_grouped_results.csv', index = False)
+
+def consolidate_results(df, prefix = 'all'):
+    '''
+    Calculate accuracies by consolidating all predictions
+    
+    Args
+        df (DataFrame): source of training data
+        iterate_over (str): column over which to iterate, i.e. subgroups used for calculation
+        prefix (str): string prepended to saved csv file
+    Returns
+        None
+    '''
+    inds = list(df.indicator.unique())
+    for ind in inds:
+        ind_ = ind.replace('perc_hh_no_', '')
+        print(f"Access to {ind_}")
+        sub = df.query(f"indicator == '{ind}'")
+        print(calculate_metrics(sub['y_true'], sub['y_pred']))
+
+def fit_with_randomsplit(df, clf, features, indicators, scale = True, n_splits = 5, prefix = 'all'):
+    '''
+    Trains input model for input indicator using input features, using randomly selected 20% of rows
+    
+    Args
+        df (dataframe): dataset source of training data
+        clf (sklearn model): unfitted model
+        features (list of str): list of features used for training
+        indicators (list of str): indicators being modelled
+        scale (bool): scale features based sklearn RobustScaler
+        n_splits (int): 
+    Returns 
+        None
+    '''
+    global X
+    raw_ = df.copy()
+    dfs = []
+    
+    for indicator in tqdm(indicators):
+        #print(indicator)
+        X = raw_[features]
+        y = raw_[indicator]
+
+        kf = KFold(n_splits=n_splits, shuffle = True, random_state = 42)
+        c = 0
+        for train_index, test_index in kf.split(X):
+            #print(c)
+            c+=1
+            clf_ = clone(clf)
+            X_train, X_test = X.iloc[train_index,:], X.iloc[test_index,:]
+            y_train, y_test = y[train_index], y[test_index]
+            if scale:
+                scaler = RobustScaler()
+                scaler.fit(X_train)
+                X_train = scaler.transform(X_train)
+                X_test = scaler.transform(X_test)
+
+            clf_.fit(X_train, y_train)
+            y_pred = clf_.predict(X_test)
+            df_ = pd.DataFrame({
+                'split_id': str(c),
+                'indicator': indicator,
+                'grid_id': raw_.loc[test_index, 'id'],
+                'adm1_name': raw_.loc[test_index, 'adm1_name'],
+                'y_true': y_test,
+                'y_pred': y_pred,
+            })
+            dfs.append(df_)
+    
+    cons_df = pd.concat(dfs, axis = 0)
+    cons_df.to_csv(data_dir + prefix + '_randomsplit_results.csv', index = False)
+    return cons_df
