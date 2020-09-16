@@ -16,6 +16,9 @@ from settings import *
 project = 'immap-colombia-270609'
 dataset = 'wash_prep'
 
+def clean_name(text):
+    return re.sub('[^a-z ]','', text.lower()).replace(' ', '_')
+
 def generate_blocks_geopackage(gdf, adm):
     '''
     From raw blocks dataset, add admin boundaries, rename relevant wash indicators
