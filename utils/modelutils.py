@@ -13,7 +13,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import LinearSVR
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler, RobustScaler
-from sklearn.externals import joblib
+import joblib
 from sklearn.base import clone
 from sklearn.model_selection import KFold
 
