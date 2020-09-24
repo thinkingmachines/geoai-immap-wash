@@ -16,6 +16,9 @@ from settings import *
 project = 'immap-colombia-270609'
 dataset = 'wash_prep'
 
+def clean_name(text):
+    return re.sub('[^a-z ]','', text.lower()).replace(' ', '_')
+
 def generate_blocks_geopackage(gdf, adm):
     '''
     From raw blocks dataset, add admin boundaries, rename relevant wash indicators
@@ -100,7 +103,8 @@ def generate_satellite_features(gdf):
     '''
     # satellite image derived - pierce through rasters
     geom_col = 'centroid_geometry'
-    satellite_features_ = satellite_features + ['nearest_highway']
+    tifs_with_250m = ['nighttime_lights', 'population', 'elevation', 'urban_index']
+    satellite_features_ = [f + '_250m' if f in tifs_with_250m else f for f in satellite_features] + ['nearest_highway']
     pois_ = ['waterway', 'commercial', 'restaurant', 'hospital', 'airport']
     poi_features_ = ['clipped_nearest_' + poi for poi in pois_]
     for feature in tqdm(poi_features_ + satellite_features_):
@@ -116,6 +120,11 @@ def generate_satellite_features(gdf):
         # Add column to geodataframe
         col_name = feature.replace('clipped_','')
         gdf[col_name] = pxl
+    
+    # remove _250m suffix
+    feats_250m = ['nighttime_lights_250m', 'population_250m', 'elevation_250m', 'urban_index_250m']
+    gdf.columns = [f[:-5] if f in feats_250m else f for f in gdf.columns]
+    
     return gdf
 
 def distance_to_nearest(
