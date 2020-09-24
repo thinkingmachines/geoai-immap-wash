@@ -16,7 +16,7 @@ from sklearn.preprocessing import MinMaxScaler, RobustScaler
 from sklearn.externals import joblib
 from sklearn.base import clone
 
-from settings import data_dir, model_dir, scaler_dir, preds_dir
+from settings import data_dir, model_dir, scaler_dir, preds_dir, features, indicators
 
 def calculate_metrics(y_true, y_pred):
     '''
@@ -226,3 +226,205 @@ def evaluate_results(indicators, prefix = ''):
         df = pd.read_csv(data_dir + out_file).query(f"indicator == '{ind}'")
         print(calculate_metrics(df['y_true'], df['y_pred']))
         df.plot(x = 'y_true', y = 'y_pred', kind = 'scatter', figsize = (5,5), xlim = (0,1), ylim = (0,1), title = indicator)
+        
+def _aggregate_by_metro_area():
+    '''
+    Aggregates predictions by metro area. Content originally from 20200914_check_trends.ipynb, Section 'check trends'
+    '''
+    
+    import pandas as pd
+    import re
+
+    def clean_name(text):
+        return (re.sub('[^a-z ]','', text.lower()).replace(' ', '_')
+                .replace('area_metropolitana_de_', '')
+                .replace('area_metropolitana_del_', ''))
+
+    wash18 = pd.read_csv(data_dir + '20200916_dataset.csv').drop_duplicates('id')
+    grid_in_metro = pd.read_csv(data_dir + 'grids_in_metro_areas.csv')
+    metro19 = pd.read_csv(data_dir + '20200831_GEIH_Metro_Areas.csv')
+    metro20 = pd.read_csv(data_dir + '20200908_GEIH_Metro_Areas_2020.csv')
+    metro_name = pd.read_csv(data_dir + 'metro_areas_id_name.csv')
+    pred_metro18 = pd.read_csv(data_dir + 'metro_area_predictions_2018.csv')
+    pred_metro19 = pd.read_csv(data_dir + 'metro_area_predictions.csv')
+    pred_metro20 = pd.read_csv(data_dir + 'metro_area_predictions_2020.csv')
+
+    metro_name['a_mtro'] = metro_name['a_mtro'].apply(clean_name)
+    metro_name = metro_name.rename(columns = {'OBJECTID': 'metro_id'})
+
+    # Actual
+    spanish = {
+        'd_hogares': 'population',
+        'd_c_acuedu': 'hh_no_water_supply',
+        'd_c_alcant': 'hh_no_sewage',
+        'd_c_sanita': 'hh_no_toilet',
+    }
+
+    df1 = (pd.merge(grid_in_metro, wash18[['id'] + list(spanish.keys())], how = 'left', on = 'id')
+        .rename(columns = spanish))
+    df2 = df1.groupby('metro_id').agg('sum').reset_index()
+    for indicator in indicators:
+        df2[indicator] = 100*df2[indicator.replace('perc_', '')] / df2['population']
+
+    metro18 = df2
+
+    spanish = {
+        'OBJECTID': 'metro_id',
+        'personas': 'population',
+        'c_acueduct': 'hh_no_water_supply',
+        'c_alcantar': 'hh_no_sewage',
+        'c_sanitari': 'hh_no_toilet',
+        'mc_acueduc': 'perc_hh_no_water_supply',
+        'mc_alcanta': 'perc_hh_no_sewage',
+        'mc_sanitar': 'perc_hh_no_toilet',
+    }
+
+    metro19 = metro19.rename(columns = spanish)
+    metro20 = metro20.rename(columns = spanish)
+
+    cols = ['metro_id', 'year'] + indicators
+
+    metro18['year'] = 2018
+    metro19['year'] = 2019
+    metro20['year'] = 2020
+
+    df3 = pd.concat([
+        metro18[cols],
+        metro19[cols],
+        metro20[cols],   
+    ], axis = 0)
+
+    df4 = pd.merge(metro_name, df3, how = 'left', on = 'metro_id')
+    df5 = df4.set_index(['metro_id', 'a_mtro', 'year']).stack().reset_index()
+    df5.columns = ['metro_id', 'a_mtro', 'year', 'indicator', 'value']
+
+    # Predicted
+    rnm = {
+        'pred_perc_hh_no_water_supply': 'perc_hh_no_water_supply', 
+        'pred_perc_hh_no_toilet': 'perc_hh_no_toilet', 
+        'pred_perc_hh_no_sewage': 'perc_hh_no_sewage'
+    }
+
+    pred_metro18['year'] = 2018
+    pred_metro19['year'] = 2019
+    pred_metro20['year'] = 2020
+
+    cols2 = ['metro_id', 'year'] + list(rnm.keys())
+    df6 = pd.concat([
+        pred_metro18[cols2].rename(columns = rnm),#metro18[cols],
+        pred_metro19[cols2].rename(columns = rnm),
+        pred_metro20[cols2].rename(columns = rnm)
+    ], axis = 0)
+
+    df7 = pd.merge(metro_name, df6, how = 'left', on = 'metro_id')
+    df8 = df7.set_index(['metro_id', 'a_mtro', 'year']).stack().reset_index()
+    df8.columns = ['metro_id', 'a_mtro', 'year', 'indicator', 'value']
+
+    df5['val_type'] = 'actual'
+    df8['val_type'] = 'pred'
+    df9 = pd.concat([df5, df8], axis = 0)
+    # df9.to_csv(data_dir + 'metro_trends.csv', index = False)
+
+    return df9
+
+def _aggregate_by_department():
+    '''
+    Aggregates predictions by department. Content originally from 03_Rollout.ipynb, Section 'what changed'
+    '''
+
+    scaler = joblib.load(scaler_dir + 'scaler_2018_250mv2.pkl')
+
+    agg_level = 'adm1_name'
+    keep_cols = [agg_level] + features + indicators
+
+    def clean_name(text):
+        return re.sub('[^a-z ]','', text.lower()).replace(' ', '_')
+
+    raw = pd.read_csv(data_dir + '20200830_dataset.csv').drop_duplicates('id')
+    raw['adm1_name'] = raw['adm1_name'].apply(clean_name)
+
+    feats_2020 = pd.read_csv(data_dir + '20200914_dataset_2020.csv')
+    preds_2020 = pd.read_csv(data_dir + '20200914_predictions2020.csv').rename(columns = {
+        'pred_perc_hh_no_water_supply': 'perc_hh_no_water_supply',
+        'pred_perc_hh_no_toilet': 'perc_hh_no_toilet',
+        'pred_perc_hh_no_sewage': 'perc_hh_no_sewage',
+    })[['id', 'perc_hh_no_water_supply', 'perc_hh_no_toilet', 'perc_hh_no_sewage']]
+
+    # join
+    wash_grid_2018_ = raw
+    wash_grid_2020_ = pd.merge(feats_2020, preds_2020, on = 'id')
+
+    # filter to 2018 grids only for comparability
+    wash_grid_2020_ = wash_grid_2020_[wash_grid_2020_['id'].isin(list(wash_grid_2018_['id'].unique()))]
+
+    # scale features except population
+    wash_grid_2018 = wash_grid_2018_[keep_cols].copy()
+    wash_grid_2020 = wash_grid_2020_[keep_cols].copy()
+
+    wash_grid_2018.loc[:,features] = scaler.transform(wash_grid_2018[features])
+    wash_grid_2020.loc[:,features] = scaler.transform(wash_grid_2020[features])
+
+    wash_grid_2018['population'] = wash_grid_2018_['population']
+    wash_grid_2020['population'] = wash_grid_2020_['population']
+
+    # standardize naming
+    to_replace = {'laguajira': 'la_guajira','valledelcauca': 'valle_del_cauca'}
+    wash_grid_2018['adm1_name'] = wash_grid_2018['adm1_name'].replace(to_replace)
+    wash_grid_2020['adm1_name'] = wash_grid_2020['adm1_name'].replace(to_replace)
+
+    # get median for everything except population
+    agg_type = {
+        'vegetation': 'median',
+        'aridity_cgiarv2': 'median',
+        'temperature': 'median',
+        'nighttime_lights': 'median',
+        'population': 'sum',
+        'elevation': 'median',
+        'urban_index': 'median',
+        'nearest_waterway': 'median',
+        'nearest_commercial': 'median',
+        'nearest_restaurant': 'median',
+        'nearest_hospital': 'median',
+        'nearest_airport': 'median',
+        'nearest_highway': 'median',
+        'perc_hh_no_water_supply': 'median',
+        'perc_hh_no_toilet': 'median',
+        'perc_hh_no_sewage': 'median',
+    }
+    wash_metro_2018 = wash_grid_2018.groupby(agg_level).agg(agg_type).reset_index()
+    wash_metro_2020 = wash_grid_2020.groupby(agg_level).agg(agg_type).reset_index()
+
+    # combine (wide format)
+    wash_agg = pd.merge(
+        wash_metro_2018, wash_metro_2020, left_on = agg_level, right_on = agg_level, suffixes = ['', '_2020']
+        , how = 'left'
+    )
+
+    # convert to long
+    df_ = wash_agg.set_index('adm1_name').stack().reset_index()
+    df_.columns = ['adm1_name', 'feature', 'value']
+    df_['year'] = 2018
+    for i, row in df_.iterrows():
+        if row.feature[-5:] == '_2020':
+            df_.loc[i, 'year'] = 2020
+            df_.loc[i, 'feature'] = df_.loc[i, 'feature'][:-5]
+
+    # df_.to_csv('wash_agg.csv', index = False)
+
+    return df_
+
+def aggregate_predictions(by = 'department'):
+    '''
+    Aggregates predictions according to the level specified.
+
+    Returns
+        (DataFrame): aggregated features and metrics per year (long format)
+    '''
+    if by == 'department':
+        return _aggregate_by_department()
+    elif by == 'metro_area':
+        return _aggregate_by_metro_area()
+    else:
+        print('Unrecognized aggregation level.')
+        
+        
