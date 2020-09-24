@@ -13,7 +13,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import LinearSVR
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler, RobustScaler
-from sklearn.externals import joblib
+from sklearn.externals import joblib # !pip install scikit-learn==0.22.2.post1
 from sklearn.base import clone
 from sklearn.model_selection import KFold
 
