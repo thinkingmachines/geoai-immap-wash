@@ -13,7 +13,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import LinearSVR
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler, RobustScaler
-from sklearn.externals import joblib # !pip install scikit-learn==0.22.2.post1
+from sklearn.externals import joblib
 from sklearn.base import clone
 from sklearn.model_selection import KFold
 
@@ -348,6 +348,57 @@ def fit_with_randomsplit(df, clf, features, indicators, scale = True, n_splits =
     cons_df = pd.concat(dfs, axis = 0)
     cons_df.to_csv(data_dir + prefix + '_randomsplit_results.csv', index = False)
     return cons_df
+
+
+def model_rollout(train_df, test_df, fit = False, save = False):
+    """
+    Fit model and return test_df with predictions
+    
+    Args
+        train_df (dataframe): data to train model on (2018)
+        test_df (dataframe): data to predict on (2019/2020)
+        fit (bool): if False, load saved pkl file of model; else fit on train_df
+        save (bool): if True, save model and scaler as pkl files
+    Returns
+        test_df (dataframe): original test_df but with predictions per indicator
+        top_features (dataframe): top features sorted by random forest importance
+    """
+
+    global clf
+    clf = RandomForestRegressor(random_state=42)
+    
+    feats = []
+    for indicator in tqdm(indicators):
+
+        avg_metrics = {'correlation':[], 'r2':[], 'mae':[], 'rmse':[]}
+        X_train, y_train = train_df[features], train_df[indicator]
+        X_test = test_df[features]
+        scaler = RobustScaler()
+        scaler.fit(X_train)
+        X_train = scaler.transform(X_train)
+        X_test = scaler.transform(X_test)
+        
+        if fit:
+            clf.fit(X_train, y_train)
+        else:
+            clf = joblib.load(model_dir + 'model_' + indicator + '_2018_250mv2.pkl')
+        
+        y_pred = clf.predict(X_test)
+        test_df['pred_' + indicator] = y_pred
+        
+        feature_importances = pd.DataFrame({'feature': list(train_df[features].columns)
+                                            , 'importance': list(clf.feature_importances_)})
+        top_features = (feature_importances
+                            .sort_values(by=['importance'], ascending = False))
+        top_features['indicator'] = indicator
+        feats.append(top_features)
+        
+        if save:
+            joblib.dump(clf, model_dir + 'model_' + indicator + '_2018_250mv2.pkl')
+            joblib.dump(scaler, scaler_dir + 'scaler_2018_250mv2.pkl') # writes 3 times, but might be cleaner to read
+    
+    return test_df, pd.concat(feats, axis = 0).reset_index(drop = True)
+
     
 def _aggregate_by_metro_area():
     '''
@@ -549,5 +600,3 @@ def aggregate_predictions(by = 'department'):
     else:
         print('Unrecognized aggregation level.')
         
-        
-

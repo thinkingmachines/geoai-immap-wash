@@ -1,5 +1,3 @@
-# !pip install -q rasterio geopandas
-# !pip install scikit-learn==0.22.2.post1
 import re
 import numpy as np
 import pandas as pd
@@ -92,7 +90,7 @@ def generate_indicator_labelled_grid(for_ = 'u'):
     gdf = gpd.GeoDataFrame(df, geometry='centroid_geometry').set_crs('EPSG:4326')
     return gdf
 
-def generate_satellite_features(gdf):
+def generate_satellite_features(gdf, year = 2018):
     '''
     Generates features derived from satellite images by piercing through rasters using the centroids of the grid from gdf
     
@@ -108,7 +106,12 @@ def generate_satellite_features(gdf):
     pois_ = ['waterway', 'commercial', 'restaurant', 'hospital', 'airport']
     poi_features_ = ['clipped_nearest_' + poi for poi in pois_]
     for feature in tqdm(poi_features_ + satellite_features_):
-        tif_file = feats_dir + f'2018_{area}_{feature}.tif'
+        
+        # if satellite feature, use updated raster
+        if feature in satellite_features_:
+            tif_file = feats_dir + f'{year}_{area}_{feature}.tif'
+        else:
+            tif_file = feats_dir + f'2018_{area}_{feature}.tif'
         raster = rio.open(tif_file)
 
         # Perform point sampling
@@ -120,7 +123,7 @@ def generate_satellite_features(gdf):
         # Add column to geodataframe
         col_name = feature.replace('clipped_','')
         gdf[col_name] = pxl
-    
+        
     # remove _250m suffix
     feats_250m = ['nighttime_lights_250m', 'population_250m', 'elevation_250m', 'urban_index_250m']
     gdf.columns = [f[:-5] if f in feats_250m else f for f in gdf.columns]
