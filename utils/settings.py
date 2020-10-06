@@ -6,6 +6,10 @@ model_dir = data_dir + 'models/'
 scaler_dir = data_dir + 'scalers/'
 preds_dir = data_dir + 'predictions/'
 sql_dir = '../sql/'
+dept_dir = data_dir + 'by_dept/'
+grid250_dir = dept_dir + 'grid_250x250m/'
+feats250_dir = dept_dir + 'features/'
+preds250_dir = dept_dir + 'predictions/'
 
 area = 'colombia'
 BBOX = [-73.17020892181104, 11.560920839000062, -72.52724612099996, 10.948171764015513]

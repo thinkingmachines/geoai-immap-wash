@@ -6,6 +6,10 @@ import os
 import glob
 import re
 
+import os
+import re
+import subprocess
+
 from scipy.stats import pearsonr, spearmanr
 from sklearn.pipeline import make_pipeline
 from sklearn.linear_model import Ridge
@@ -20,7 +24,10 @@ from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from settings import data_dir, model_dir, scaler_dir, preds_dir, features, indicators
+import sys
+sys.path.insert(0, '../utils')
+import geoutils
+from settings import data_dir, model_dir, scaler_dir, preds_dir, features, indicators, dept_dir, grid250_dir, feats250_dir, preds250_dir
 
 def calculate_metrics(y_true, y_pred):
     '''
@@ -349,8 +356,9 @@ def fit_with_randomsplit(df, clf, features, indicators, scale = True, n_splits =
     cons_df.to_csv(data_dir + prefix + '_randomsplit_results.csv', index = False)
     return cons_df
 
+# cache_dict = {}
 
-def model_rollout(train_df, test_df, fit = False, save = False):
+def model_rollout(train_df, test_df, fit = False, save = False, verbose = True, cache = False):
     """
     Fit model and return test_df with predictions
     
@@ -366,9 +374,13 @@ def model_rollout(train_df, test_df, fit = False, save = False):
 
     global clf
     clf = RandomForestRegressor(random_state=42)
+    if verbose:
+        iterable = tqdm(indicators)
+    else:
+        iterable = indicators
     
     feats = []
-    for indicator in tqdm(indicators):
+    for indicator in iterable:
 
         avg_metrics = {'correlation':[], 'r2':[], 'mae':[], 'rmse':[]}
         X_train, y_train = train_df[features], train_df[indicator]
@@ -381,7 +393,14 @@ def model_rollout(train_df, test_df, fit = False, save = False):
         if fit:
             clf.fit(X_train, y_train)
         else:
-            clf = joblib.load(model_dir + 'model_' + indicator + '_2018_250mv2.pkl')
+            path = model_dir + 'model_' + indicator + '_2018_250mv2.pkl'
+            clf = joblib.load(path)
+#             if cache:
+#                 if path in cache_dict:
+#                     clf = cache_dict[path]
+#                 else:
+#                     clf = joblib.load(path)
+#                     cache_dict[path] = clf
         
         y_pred = clf.predict(X_test)
         test_df['pred_' + indicator] = y_pred
@@ -600,3 +619,116 @@ def aggregate_predictions(by = 'department'):
     else:
         print('Unrecognized aggregation level.')
         
+## Rollout utils ----
+def save_output(test_df, out_file = preds250_dir + 'test.gpkg'):
+    '''
+    This function saves a geopackage per dataframe provided.
+    
+    Args
+        test_df (DataFrame): contains features, geometries and predictions
+        out_file (str): filename to save to
+    Returns
+        None
+    '''
+    # keep only geometries and predictions
+    keep_cols = ['id', 'geometry', 'centroid_geometry', 'adm1_name', 'adm2_name', 'pred_perc_hh_no_water_supply', 'pred_perc_hh_no_toilet', 'pred_perc_hh_no_sewage']
+    df2 = test_df[keep_cols]
+    df2['geometry'] = df2['geometry'].apply(loads)
+
+    # output to geopackage
+    gdf2 = gpd.GeoDataFrame(df2, geometry = 'geometry')
+    gdf2['centroid_geometry'] = gdf2['centroid_geometry'].astype(str)
+    gdf2.crs = 'epsg:4326'
+    gdf2.to_file(out_file, driver = 'GPKG')
+    
+def predict_by_chunk(adm1, in_dir = grid250_dir, out_dir = preds250_dir, chunksize = 30000):
+    '''
+    Splits data per department into chunks of 30K rows, so that prediction does not crash
+    
+    Args
+        adm1 (str): Department to predict on
+        in_dir (str): directory where grids by department is located (e.g. amazonas.csv contains the grids + geometries of Amazon)
+        out_dir (str): directory where predictions will be saved
+        chunksize (int): how many rows to read at a time
+    Returns
+        None
+    '''
+    geom_col = 'centroid_geometry'
+    chunk_dir = out_dir + adm1 + '/'
+    if not os.path.exists(chunk_dir):
+        os.makedirs(chunk_dir)
+
+    # to resume at nth_chunk, use skiprows=nth_chunk*chunksize
+    c = 0
+    with tqdm() as pbar:
+        for chunk in pd.read_csv(data_dir + in_dir + adm1 + '.csv', chunksize=chunksize):
+            c += 1
+
+            df = chunk
+            df[geom_col] = df[geom_col].apply(loads)
+            gdf = gpd.GeoDataFrame(df, geometry = geom_col)
+
+            test_df = geoutils.generate_data(gdf = gdf, year = '2018', out_file = chunk_dir + f'{c}.csv', save = True, verbose = False)
+            test_df, top_features = modelutils.model_rollout(train_df, test_df, fit = False, save = False, verbose = False)
+
+            save_output(test_df, out_file = chunk_dir + f'{c}.gpkg')
+
+            pbar.update(1)
+            
+def gpkgs_to_raster(adm1, verbose = True):
+    '''
+    This function converts the chunked gpkg predictions to 1 raster per department. Before running, make a gdal conda environment using:
+    # conda create --name gdal_env
+    # conda activate gdal_env
+    # conda install -c conda-forge gdal
+    
+    Args
+        adm1 (str): department to consolidate data on
+        verbose (bool): display logging
+    Returns
+        None
+    '''
+
+    
+    # get list of numerical gpkgs
+    fnames = [
+        fname for fname in os.listdir(preds250_dir + adm1) 
+        if '.gpkg' in fname 
+        and re.search('[0-9]',fname) is not None
+    ]
+    fnames.sort()
+    if verbose:
+        iterable = tqdm(fnames)
+    else:
+        iterable = fnames
+        
+    gdfs = []
+    if verbose: print('Consolidating to one geopackage..');
+    for fname in iterable:
+        gdfs.append(gpd.read_file(preds250_dir + f'{adm1}/{fname}'))
+    gdf = pd.concat(gdfs, axis = 0)
+    x1, y1, x2, y2 = tuple(gdf.total_bounds)
+
+    gdf.to_file(preds250_dir + f'{adm1}/cons.gpkg', driver = 'GPKG')
+
+    text = '''
+    eval "$(conda shell.bash hook)"
+    conda activate gdal_env
+
+    gdal_rasterize -a pred_perc_hh_no_water_supply -tr 0.00225225 0.00225225 -co "COMPRESS=DEFLATE" -a_nodata 0.0 -te {x1} {y1} {x2} {y2} -ot Float32 -of GTiff {in_dir}cons.gpkg {out_dir}{adm1}_perc_hh_no_water_supply.tif
+    gdal_rasterize -a pred_perc_hh_no_sewage -tr 0.00225225 0.00225225 -co "COMPRESS=DEFLATE" -a_nodata 0.0 -te {x1} {y1} {x2} {y2} -ot Float32 -of GTiff {in_dir}cons.gpkg {out_dir}{adm1}_perc_hh_no_sewage.tif
+    gdal_rasterize -a pred_perc_hh_no_toilet -tr 0.00225225 0.00225225 -co "COMPRESS=DEFLATE" -a_nodata 0.0 -te {x1} {y1} {x2} {y2} -ot Float32 -of GTiff {in_dir}cons.gpkg {out_dir}{adm1}_perc_hh_no_toilet.tif
+    # gdal_merge.py -o {adm1}.tif 1.tif 2.tif 3.tif -co COMPRESS=LZW -co BIGTIFF=YES -co PREDICTOR=2 -co TILED=YES
+    '''
+
+    rpl = {'{x1}': x1, '{x2}': x2, '{y1}': y1, '{y2}': y2, '{adm1}': adm1, '{in_dir}': preds250_dir + adm1 + '/', '{out_dir}': preds250_dir}
+    for k, v in rpl.items():
+        text = text.replace(k, str(v))
+    
+    if verbose: print('Running rasterization');
+    f = open('rasterize.sh', 'w')
+    f.writelines(text)
+    f.close()
+    
+    result = subprocess.run('sh rasterize.sh', shell = True, stdout=subprocess.PIPE)
+    if verbose: print(result.stdout);
