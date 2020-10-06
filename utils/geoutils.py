@@ -90,7 +90,7 @@ def generate_indicator_labelled_grid(for_ = 'u'):
     gdf = gpd.GeoDataFrame(df, geometry='centroid_geometry').set_crs('EPSG:4326')
     return gdf
 
-def generate_satellite_features(gdf, year = 2018):
+def generate_satellite_features(gdf, year = 2018, verbose = True):
     '''
     Generates features derived from satellite images by piercing through rasters using the centroids of the grid from gdf
     
@@ -105,7 +105,12 @@ def generate_satellite_features(gdf, year = 2018):
     satellite_features_ = [f + '_250m' if f in tifs_with_250m else f for f in satellite_features] + ['nearest_highway']
     pois_ = ['waterway', 'commercial', 'restaurant', 'hospital', 'airport']
     poi_features_ = ['clipped_nearest_' + poi for poi in pois_]
-    for feature in tqdm(poi_features_ + satellite_features_):
+    if verbose:
+        iterable = tqdm(poi_features_ + satellite_features_)
+    else:
+        iterable = poi_features_ + satellite_features_
+    
+    for feature in iterable:
         
         # if satellite feature, use updated raster
         if feature in satellite_features_:
@@ -466,3 +471,25 @@ def generate_training_data(gdf):
 
     train_df = df.reset_index()
     return train_df
+
+def generate_data(gdf = None, year = '2018', out_file = feats250_dir + 'bogot_dc.csv', verbose = True, save = False):
+    '''
+    This function generates data to rollout on, data for a specific year
+    
+    Args
+        gdf (GeoDataFrame): contains grid geometries with centroid_geometry column
+        year (str): year to generate data on
+        out_file (str): where to save data generated data
+        verbose (bool): display logging
+        save (bool): if generated data should be saved to out_file
+    Returns
+        test_df (DataFrame): dataframe with features as columns
+    '''
+    gdf = generate_satellite_features(gdf, year = year, verbose = verbose)
+    test_df = generate_training_data(gdf)
+    cols = ['id', 'geometry'] + poi_features + satellite_features
+    test_df = test_df.dropna(subset = cols)
+    if save:
+        test_df.to_csv(out_file)
+        
+    return test_df
