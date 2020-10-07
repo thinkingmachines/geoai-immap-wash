@@ -312,8 +312,8 @@ def summarize_metrics(df, iterate_over = 'adm1_name', prefix = 'all'):
     Returns
         None
     '''
-    res = average_results(df, iterate_over = 'adm1_name', prefix = 'all')
-#     res = res.set_index('indicator')
+    res = average_results(df, iterate_over = iterate_over, prefix = 'all')
+    #res = res.set_index('indicator')
   
     inds = list(df.indicator.unique())
     for ind in inds:
