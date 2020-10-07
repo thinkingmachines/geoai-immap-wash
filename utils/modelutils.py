@@ -265,25 +265,78 @@ def average_results(df, iterate_over = 'adm1_name', prefix = 'all'):
         iterate_over (str): column over which to iterate, i.e. subgroups used for calculation
         prefix (str): string prepended to saved csv file
     Returns
-        None
+        res (DataFrame): metrics per iteration
     '''
     inds = list(df.indicator.unique())
     dfs = []
     for ind in inds:
         ind_ = ind.replace('perc_hh_no_', '').split('_')[0]
-        print(f"Access to {ind_}")
+
+        ## Subset to indicator
         sub1 = df.query(f"indicator == '{ind}'")
         list_ = list(sub1[iterate_over].unique())
         recs = []
+
+        ## Subset to fold
         for item in list_:
             sub2 = sub1.query(f"{iterate_over} == '{item}'")
             metrics_ = calculate_metrics(sub2['y_true'], sub2['y_pred'])
             recs.append((ind_, item, metrics_['correlation'], metrics_['r2'], metrics_['rmse']))
+
         df_ = pd.DataFrame(recs, columns = ['indicator', iterate_over, 'correlation', 'r2', 'rmse']).set_index(iterate_over)
-        print(df_.mean())
+        
         dfs.append(df_)
     res = pd.concat(dfs, axis = 0)
-    # res.to_csv(data_dir + prefix + '_' + indicator + '_grouped_results.csv', index = False)
+    return(res)
+
+def plot_preds_test(y_tests, y_preds, ind, avg_metrics):
+    '''
+    Scatter plot of the predicted value and true value
+    
+    Args
+        y_tests (series): true values
+        y_preds (series): predicted values
+        ind (str): string that indicates indicator used in plot title
+        avg_metrics (DatFrame): averaged accuracies of the indicator
+    Returns
+        None
+    '''
+    plt.scatter(y_preds, y_tests, alpha=0.4)
+    plt.plot([0, 1],[0, 1], color='black')
+    plt.xlabel('y_pred')
+    plt.ylabel('y_test')
+    plt.title('{} (r2 = {:.2f})'.format(ind, avg_metrics['r2']))
+    plt.show()
+
+def summarize_metrics(df, iterate_over = 'adm1_name', prefix = 'all'):
+    '''
+    Prints the averaged accuracies across all subgroups with a scatter plot of the true and predicted values
+    
+    Args
+        df (DataFrame): source of training data
+        iterate_over (str): column over which to iterate, i.e. subgroups used for calculation
+        prefix (str): string prepended to saved csv file
+    Returns
+        None
+    '''
+    res = average_results(df, iterate_over = iterate_over, prefix = 'all')
+    #res = res.set_index('indicator')
+  
+    inds = list(df.indicator.unique())
+    for ind in inds:
+        ind_ = ind.replace('perc_hh_no_', '').split('_')[0]
+        sub = df.query(f"indicator == '{ind}'")
+        y_tests = sub.y_true
+        y_preds = sub.y_pred
+        sub1 = res.query(f"indicator == '{ind_}'")
+        sub1 = sub1.set_index('indicator')
+        avg_metrics = {key: np.mean(values) for key, values in sub1.items()}
+
+        print(f"\nAccess to {ind_}")
+        print('\nAverage Metrics')
+        for key, val in avg_metrics.items():
+            print('{}: {:.4f}'.format(key, val))
+        plot_preds_test(y_tests, y_preds,ind_,avg_metrics)
 
 def consolidate_results(df, prefix = 'all'):
     '''
