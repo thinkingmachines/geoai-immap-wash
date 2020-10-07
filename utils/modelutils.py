@@ -409,9 +409,7 @@ def fit_with_randomsplit(df, clf, features, indicators, scale = True, n_splits =
     cons_df.to_csv(data_dir + prefix + '_randomsplit_results.csv', index = False)
     return cons_df
 
-# cache_dict = {}
-
-def model_rollout(train_df, test_df, fit = False, save = False, verbose = True, cache = False):
+def model_rollout(train_df, test_df, fit = False, save = False, verbose = True):
     """
     Fit model and return test_df with predictions
     
@@ -448,12 +446,6 @@ def model_rollout(train_df, test_df, fit = False, save = False, verbose = True, 
         else:
             path = model_dir + 'model_' + indicator + '_2018_250mv2.pkl'
             clf = joblib.load(path)
-#             if cache:
-#                 if path in cache_dict:
-#                     clf = cache_dict[path]
-#                 else:
-#                     clf = joblib.load(path)
-#                     cache_dict[path] = clf
         
         y_pred = clf.predict(X_test)
         test_df['pred_' + indicator] = y_pred
@@ -475,6 +467,7 @@ def model_rollout(train_df, test_df, fit = False, save = False, verbose = True, 
 def _aggregate_by_metro_area():
     '''
     Aggregates predictions by metro area. Content originally from 20200914_check_trends.ipynb, Section 'check trends'
+    Datasets read were created from scripts in github branch validation/geih-metro-areas
     '''
     
     import pandas as pd
@@ -485,7 +478,7 @@ def _aggregate_by_metro_area():
                 .replace('area_metropolitana_de_', '')
                 .replace('area_metropolitana_del_', ''))
 
-    wash18 = pd.read_csv(data_dir + '20200916_dataset.csv').drop_duplicates('id')
+    wash18 = pd.read_csv(data_dir + '20200916_dataset.csv')
     grid_in_metro = pd.read_csv(data_dir + 'grids_in_metro_areas.csv')
     metro19 = pd.read_csv(data_dir + '20200831_GEIH_Metro_Areas.csv')
     metro20 = pd.read_csv(data_dir + '20200908_GEIH_Metro_Areas_2020.csv')
@@ -585,7 +578,7 @@ def _aggregate_by_department():
     def clean_name(text):
         return re.sub('[^a-z ]','', text.lower()).replace(' ', '_')
 
-    raw = pd.read_csv(data_dir + '20200830_dataset.csv').drop_duplicates('id')
+    raw = pd.read_csv(data_dir + '20200916_dataset.csv')
     raw['adm1_name'] = raw['adm1_name'].apply(clean_name)
 
     feats_2020 = pd.read_csv(data_dir + '20200914_dataset_2020.csv')
