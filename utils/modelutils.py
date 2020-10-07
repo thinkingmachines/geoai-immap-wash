@@ -258,80 +258,78 @@ def average_results(df, iterate_over = 'adm1_name', prefix = 'all'):
         iterate_over (str): column over which to iterate, i.e. subgroups used for calculation
         prefix (str): string prepended to saved csv file
     Returns
-        None
+        res (DataFrame): metrics per iteration
     '''
     inds = list(df.indicator.unique())
     dfs = []
     for ind in inds:
-        ## Print indicator
         ind_ = ind.replace('perc_hh_no_', '').split('_')[0]
-        print(f"Access to {ind_}")
-        
+
         ## Subset to indicator
         sub1 = df.query(f"indicator == '{ind}'")
-        y_tests = sub1.y_true
-        y_preds = sub1.y_pred
-        
         list_ = list(sub1[iterate_over].unique())
         recs = []
-        
-        ## computes metrics for each fold and stores avg to avg_metrics
+
+        ## Subset to fold
         for item in list_:
             sub2 = sub1.query(f"{iterate_over} == '{item}'")
-            y_test = sub2.y_true
-            y_pred = sub2.y_pred
-            
-            ## metrics for each fold
-            print(item)
-            print('Number of test samples: {}'.format(len(y_test)))
-            metrics = calculate_metrics(y_test, y_pred)
-            for key, val in metrics.items():
-                print('\t{}: {:.4f}'.format(key, val))
+            metrics_ = calculate_metrics(sub2['y_true'], sub2['y_pred'])
+            recs.append((ind_, item, metrics_['correlation'], metrics_['r2'], metrics_['rmse']))
+
+        df_ = pd.DataFrame(recs, columns = ['indicator', iterate_over, 'correlation', 'r2', 'rmse']).set_index(iterate_over)
         
-            plt.figure(figsize=(4,3))
-            plt.scatter(y_pred, y_test, alpha=0.4, color='red')
-            plt.plot([0, 1],[0, 1], color='black')
-            plt.xlabel('y_pred')
-            plt.ylabel('y_test')
-            plt.title('{} (r2 = {:.2f})'.format(ind, metrics['r2'])) # edited
-            plt.show()
-            
-            avg_metrics = {'correlation':[], 'r2':[], 'mae':[], 'rmse':[]}
-            for metric in metrics:
-                avg_metrics[metric].append(metrics[metric])
-                
-#         y_tests.extend(list(y_tests))
-#         y_preds.extend(list(y_preds))
+        dfs.append(df_)
+    res = pd.concat(dfs, axis = 0)
+    return(res)
 
-        avg_metrics = {key: np.mean(values) for key, values in avg_metrics.items()}
+def plot_preds_test(y_tests, y_preds, ind, avg_metrics):
+    '''
+    Scatter plot of the predicted value and true value
+    
+    Args
+        y_tests (series): true values
+        y_preds (series): predicted values
+        ind (str): string that indicates indicator used in plot title
+        avg_metrics (DatFrame): averaged accuracies of the indicator
+    Returns
+        None
+    '''
+    plt.scatter(y_preds, y_tests, alpha=0.4)
+    plt.plot([0, 1],[0, 1], color='black')
+    plt.xlabel('y_pred')
+    plt.ylabel('y_test')
+    plt.title('{} (r2 = {:.2f})'.format(ind, avg_metrics['r2']))
+    plt.show()
 
+def summarize_metrics(df, iterate_over = 'adm1_name', prefix = 'all'):
+    '''
+    Prints the averaged accuracies across all subgroups with a scatter plot of the true and predicted values
+    
+    Args
+        df (DataFrame): source of training data
+        iterate_over (str): column over which to iterate, i.e. subgroups used for calculation
+        prefix (str): string prepended to saved csv file
+    Returns
+        None
+    '''
+    res = average_results(df, iterate_over = 'adm1_name', prefix = 'all')
+#     res = res.set_index('indicator')
+  
+    inds = list(df.indicator.unique())
+    for ind in inds:
+        ind_ = ind.replace('perc_hh_no_', '').split('_')[0]
+        sub = df.query(f"indicator == '{ind}'")
+        y_tests = sub.y_true
+        y_preds = sub.y_pred
+        sub1 = res.query(f"indicator == '{ind_}'")
+        sub1 = sub1.set_index('indicator')
+        avg_metrics = {key: np.mean(values) for key, values in sub1.items()}
+
+        print(f"\nAccess to {ind_}")
         print('\nAverage Metrics')
         for key, val in avg_metrics.items():
             print('{}: {:.4f}'.format(key, val))
-
-        print('\nConsolidated Metrics')
-        consolidated_metrics = calculate_metrics(y_tests, y_preds)
-        for key, val in consolidated_metrics.items():
-            print('{}: {:.4f}'.format(key, val))
-
-        print()
-
-        plt.scatter(y_preds, y_tests, alpha=0.4)
-        plt.plot([0, 1],[0, 1], color='black')
-        plt.xlabel('y_pred')
-        plt.ylabel('y_test')
-        plt.title('{} (r2 = {:.2f})'.format(ind, avg_metrics['r2'])) # edited
-        plt.show()
-        
-    print()
-            
-#             recs.append((ind_, item, metrics_['correlation'], metrics_['r2'], metrics_['rmse']))
-#         df_ = pd.DataFrame(recs, columns = ['indicator', iterate_over, 'correlation', 'r2', 'rmse']).set_index(iterate_over)
-#         print(df_.mean())
-#         dfs.append(df_)
-#     res = pd.concat(dfs, axis = 0)
-#     return(res)
-    # res.to_csv(data_dir + prefix + '_' + indicator + '_grouped_results.csv', index = False)
+        plot_preds_test(y_tests, y_preds,ind_,avg_metrics)
 
 def consolidate_results(df, prefix = 'all'):
     '''
