@@ -2,12 +2,13 @@ import pandas as pd
 from math import sqrt
 import numpy as np
 from tqdm import tqdm
-import os
-import glob
 import re
+import geopandas as gpd
+from shapely.wkt import loads
 
 import os
 import re
+import glob
 import subprocess
 
 from scipy.stats import pearsonr, spearmanr
@@ -721,21 +722,15 @@ def predict_by_chunk(adm1, in_dir = grid250_dir, out_dir = preds250_dir, chunksi
 
             pbar.update(1)
             
-def gpkgs_to_raster(adm1, verbose = True):
-    '''
-    This function converts the chunked gpkg predictions to 1 raster per department. Before running, make a gdal conda environment using:
-    # conda create --name gdal_env
-    # conda activate gdal_env
-    # conda install -c conda-forge gdal
-    
-    Args
-        adm1 (str): department to consolidate data on
-        verbose (bool): display logging
-    Returns
-        None
-    '''
+def consolidate_chunks_to_department(adm1, verbose = True):
+    """
+    Consolidates prediction chunks to one geodataframe for whole department
 
-    
+    Args
+        adm1 (str): department to aggregate chunks on
+    Returns
+        (GeoDataFrame): all grids for department
+    """
     # get list of numerical gpkgs
     fnames = [
         fname for fname in os.listdir(preds250_dir + adm1) 
@@ -752,21 +747,49 @@ def gpkgs_to_raster(adm1, verbose = True):
     if verbose: print('Consolidating to one geopackage..');
     for fname in iterable:
         gdfs.append(gpd.read_file(preds250_dir + f'{adm1}/{fname}'))
-    gdf = pd.concat(gdfs, axis = 0)
-    x1, y1, x2, y2 = tuple(gdf.total_bounds)
+    return pd.concat(gdfs, axis = 0)
+
+def gpkgs_to_raster(adm1, verbose = True):
+    '''
+    This function converts the chunked gpkg predictions to 1 raster per department. Before running, make a gdal conda environment using:
+    # conda create --name gdal_env
+    # conda activate gdal_env
+    # conda install -c conda-forge gdal
+    
+    Args
+        adm1 (str): department to consolidate data on
+        verbose (bool): display logging
+    Returns
+        None
+    '''
+
+    gdf2 = consolidate_chunks_to_department(adm1, verbose = verbose)
+
+    # replace predictions on locations with actual grid values
+    df = pd.read_csv(data_dir + '20200916_dataset.csv')
+    df.adm1_name = df.adm1_name.apply(geoutils.clean_name)
+    df = df.query(f"adm1_name == '{adm1}'")
+    rnm = {ind: 'pred_' + ind for ind in indicators}
+    df.rename(columns = rnm, inplace = True)
+    df['geometry'] = df['geometry'].apply(loads)
+    gdf1 = gpd.GeoDataFrame(df, geometry = 'geometry').set_crs('EPSG:4326')
+    gdf1[list(rnm.values())] = gdf1[list(rnm.values())] + 0.000001 # gdal fails to rasterize perfect 0s
+    gdf1['prio'] = 1
+    gdf2['prio'] = 2
+    keep_cols = gdf2.columns
+    gdf = pd.concat([gdf1[keep_cols],gdf2[keep_cols]], axis = 0).sort_values('prio', ascending = True).drop_duplicates('id', keep = 'first')
 
     gdf.to_file(preds250_dir + f'{adm1}/cons.gpkg', driver = 'GPKG')
 
     text = '''
-    eval "$(conda shell.bash hook)"
-    conda activate gdal_env
-
-    gdal_rasterize -a pred_perc_hh_no_water_supply -tr 0.00225225 0.00225225 -co "COMPRESS=DEFLATE" -a_nodata 0.0 -te {x1} {y1} {x2} {y2} -ot Float32 -of GTiff {in_dir}cons.gpkg {out_dir}{adm1}_perc_hh_no_water_supply.tif
-    gdal_rasterize -a pred_perc_hh_no_sewage -tr 0.00225225 0.00225225 -co "COMPRESS=DEFLATE" -a_nodata 0.0 -te {x1} {y1} {x2} {y2} -ot Float32 -of GTiff {in_dir}cons.gpkg {out_dir}{adm1}_perc_hh_no_sewage.tif
-    gdal_rasterize -a pred_perc_hh_no_toilet -tr 0.00225225 0.00225225 -co "COMPRESS=DEFLATE" -a_nodata 0.0 -te {x1} {y1} {x2} {y2} -ot Float32 -of GTiff {in_dir}cons.gpkg {out_dir}{adm1}_perc_hh_no_toilet.tif
-    # gdal_merge.py -o {adm1}.tif 1.tif 2.tif 3.tif -co COMPRESS=LZW -co BIGTIFF=YES -co PREDICTOR=2 -co TILED=YES
+eval "$(conda shell.bash hook)"
+conda activate gdal_env
+gdal_rasterize -a pred_perc_hh_no_water_supply -tr 0.00225225 0.00225225 -co "COMPRESS=DEFLATE" -a_nodata 0.0 -te {x1} {y1} {x2} {y2} -ot Float32 -of GTiff {in_dir}cons.gpkg {out_dir}{adm1}_perc_hh_no_water_supply.tif
+gdal_rasterize -a pred_perc_hh_no_sewage -tr 0.00225225 0.00225225 -co "COMPRESS=DEFLATE" -a_nodata 0.0 -te {x1} {y1} {x2} {y2} -ot Float32 -of GTiff {in_dir}cons.gpkg {out_dir}{adm1}_perc_hh_no_sewage.tif
+gdal_rasterize -a pred_perc_hh_no_toilet -tr 0.00225225 0.00225225 -co "COMPRESS=DEFLATE" -a_nodata 0.0 -te {x1} {y1} {x2} {y2} -ot Float32 -of GTiff {in_dir}cons.gpkg {out_dir}{adm1}_perc_hh_no_toilet.tif
     '''
 
+    x1, y1, x2, y2 = tuple(gdf.total_bounds)
     rpl = {'{x1}': x1, '{x2}': x2, '{y1}': y1, '{y2}': y2, '{adm1}': adm1, '{in_dir}': preds250_dir + adm1 + '/', '{out_dir}': preds250_dir}
     for k, v in rpl.items():
         text = text.replace(k, str(v))
